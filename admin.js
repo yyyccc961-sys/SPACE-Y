@@ -57,17 +57,30 @@
   // ===== معلومات الشركة =====
   async function initSettings() {
     const form = $('#settingsForm');
+    const showLogo = url => { const img = $('#logoPreview'); if (img) { img.src = url || ''; img.style.display = url ? 'block' : 'none'; } };
     const { data, error } = await client.from('site_settings').select('*').limit(1).maybeSingle();
     if (error) say('#settingsStatus', 'تعذر تحميل الإعدادات.');
-    else if (data) for (const k of ['company_name', 'description', 'whatsapp', 'instagram']) form.elements[k].value = data[k] || '';
+    else if (data) { for (const k of ['company_name', 'description', 'whatsapp', 'instagram']) form.elements[k].value = data[k] || ''; showLogo(data.logo_url); }
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const f = new FormData(e.currentTarget);
       const payload = { company_name: f.get('company_name'), description: f.get('description'), whatsapp: f.get('whatsapp'), instagram: f.get('instagram'), updated_at: new Date().toISOString() };
+      const logo = f.get('logo_file');
+      if (logo && logo.size) {
+        if (!logo.type.startsWith('image/')) { say('#settingsStatus', 'الشعار لازم يكون صورة.'); return; }
+        if (logo.size > 5 * 1024 * 1024) { say('#settingsStatus', 'الحد الأقصى لحجم الشعار 5 ميغابايت.'); return; }
+        say('#settingsStatus', 'جاري رفع الشعار...');
+        const path = 'logo-' + Date.now() + '-' + logo.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+        const { data: up, error: upErr } = await client.storage.from('space-media').upload(path, logo, { upsert: false, contentType: logo.type });
+        if (upErr) { say('#settingsStatus', 'فشل رفع الشعار. تأكد من إعداد التخزين.'); console.error(upErr); return; }
+        payload.logo_url = client.storage.from('space-media').getPublicUrl(up.path).data.publicUrl;
+      }
       const { data: existing, error: readError } = await client.from('site_settings').select('id').limit(1).maybeSingle();
       if (readError) { say('#settingsStatus', 'تعذر قراءة الإعدادات.'); return; }
       const result = existing ? await client.from('site_settings').update(payload).eq('id', existing.id) : await client.from('site_settings').insert(payload);
-      say('#settingsStatus', result.error ? 'ما انحفظت المعلومات؛ تحقق من صلاحيات Supabase.' : 'تم حفظ معلومات الشركة.');
+      if (result.error) { say('#settingsStatus', 'ما انحفظت المعلومات؛ تحقق من الصلاحيات ومن إضافة عمود logo_url.'); console.error(result.error); return; }
+      if (payload.logo_url) { showLogo(payload.logo_url); form.elements.logo_file.value = ''; }
+      say('#settingsStatus', 'تم حفظ معلومات الشركة.');
     });
   }
 
@@ -139,11 +152,7 @@
   async function initRequests() {
     const { data, error } = await client.from('customer_requests').select('*').order('created_at', { ascending: false }).limit(100);
     if (error) { $('#requestsList').innerHTML = '<small>تعذر تحميل الطلبات؛ تحقق من صلاحيات المدير.</small>'; return; }
-    $('#requestsList').innerHTML = (data || []).map(r => `<div class="admin-item"><span><b>${esc(r.customer_name)}</b> — ${esc(r.phone)}<small>${esc(r.service)} · ${esc(r.details)}<br>${r.created_at ? new Date(r.created_at).toLocaleString('ar-IQ') : ''}</small></span><select data-status="${r.id}" aria-label="حالة الطلب"><option value="new" ${r.status === 'new' ? 'selected' : ''}>جديد</option><option value="in_progress" ${r.status === 'in_progress' ? 'selected' : ''}>قيد التنفيذ</option><option value="completed" ${r.status === 'completed' ? 'selected' : ''}>مكتمل</option></select></div>`).join('') || '<small>ماكو طلبات جديدة حالياً.</small>';
-    $('#requestsList').querySelectorAll('[data-status]').forEach(sel => sel.addEventListener('change', async () => {
-      const { error } = await client.from('customer_requests').update({ status: sel.value }).eq('id', sel.dataset.status);
-      say('#requestsStatus', error ? 'تعذر تحديث الحالة.' : 'تم تحديث حالة الطلب.');
-    }));
+    $('#requestsList').innerHTML = (data || []).map(r => `<div class="admin-item"><span><b>${esc(r.customer_name)}</b> — ${esc(r.phone)}<small>${esc(r.service)} · ${esc(r.details)}<br>${r.created_at ? new Date(r.created_at).toLocaleString('ar-IQ') : ''}</small></span></div>`).join('') || '<small>ماكو طلبات جديدة حالياً.</small>';
   }
 
   // ===== الحسابات والإيرادات =====
